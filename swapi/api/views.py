@@ -35,9 +35,48 @@ def people_list_view(request):
 
         * If submited payload is nos JSON valid, return a `400` response.
     """
-    pass
-
-
+    if request.body:
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except ValueError:
+            return JsonResponse(
+                {"success": False, "msg": "Provide a valid JSON payload"},
+                status=400)
+        status = 200
+        
+    if request.method == 'GET':
+        qs = People.objects.all()
+        data = [serialize_people_as_json(people) for people in qs]
+        status = 201
+        
+    elif request.method == 'POST':
+        planet_id = payload.get('homeworld', None)
+        try:
+            planet = Planet.objects.get(id=planet_id)
+        except Planet.DoesNotExist:
+            return JsonResponse(
+                {"success": False, "msg": "Could not find planet with id: {}".format(planet_id)},
+                status=404)
+        try:
+            people = People.objects.create(
+                name=payload['name'],
+                homeworld=planet,
+                height=payload['height'],
+                mass=payload['mass'],
+                hair_color=payload['hair_color'])
+        except (ValueError, KeyError):
+            return JsonResponse(
+                {"success": False, "msg": "Provided payload is not valid"},
+                status=400)
+        data = serialize_people_as_json(people)
+        status = 201
+        
+    else:
+        data = {"success": False, "msg": "Invalid HTTP method"}
+        status=400
+        
+    return JsonResponse(data, status=status, safe=False)
+    
 @csrf_exempt
 def people_detail_view(request, people_id):
     """
@@ -59,4 +98,58 @@ def people_detail_view(request, people_id):
 
         * If submited payload is nos JSON valid, return a `400` response.
     """
-    pass
+    try:
+        people = People.objects.get(id=people_id)
+    except people.DoesNotExist:
+        return JsonResponse(
+                {"success": False, "msg": "Could not find people with id: {}".format(people_id)},
+                status=404)
+        
+    if request.body:
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except ValueError:
+            return JsonResponse(
+                {"success": False, "msg": "Provide a valid JSON payload"},
+                status=400)
+        status = 200
+        
+    if request.method == 'GET':
+        
+        data = serialize_people_as_json(people)
+        status = 200
+        
+    elif request.method in ['PUT', 'PATCH']:
+        for field in ['name', 'homeworld', 'mass', 'height', 'hair_color']:
+            if not field in payload:
+                if request.method == 'PATCH':
+                    continue
+                return JsonResponse(
+                    {"success": False, "msg": "Missing field in full update"},
+                    status=400)
+            if field == 'homeworld':
+                try:
+                    payload['homeworld'] = Planet.objects.get(id=payload['homeworld'])
+                except Planet.DoesNotExist:
+                    return JsonResponse(
+                        {"success": False, "msg": "Could not find planet with id: {}".format(payload['homeworld'])},
+                        status=404)
+            try:
+                setattr(people, field, payload[field]) #instance,attribute,value
+                people.save()
+            except ValueError:
+                return JsonResponse(
+                    {"success": False, "msg": "Provided payload is not valid"},
+                    status=400)
+        data = serialize_people_as_json(people)
+    elif request.method == 'DELETE':
+        # DELETE /people/:id
+        people.delete()
+        data = {"success": True}
+    else:
+        data = {"success": False, "msg": "Invalid HTTP method"}
+        status=400
+                
+        
+    return JsonResponse(data, safe=False, status=status)
+        

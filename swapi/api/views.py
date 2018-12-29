@@ -1,8 +1,10 @@
 import json
 
 from django.shortcuts import render
+from django.views.generic import View
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
 
 from api.models import Planet, People
 from api.fixtures import SINGLE_PEOPLE_OBJECT, PEOPLE_OBJECTS
@@ -152,4 +154,125 @@ def people_detail_view(request, people_id):
                 
         
     return JsonResponse(data, safe=False, status=status)
+    
+@method_decorator(csrf_exempt, name='dispatch') 
+#same as doing inside the class
+# def dispatch(self, request, *arg, **kwargs):
+#     return super().dispatch(self, request, *arg, **kwargs)
+class PeopleView(View):
+    
+    def _get_object(self, people_id):
+        try:
+            return People.objects.get(id=people_id)
+        except People.DoesNotExist:
+            return None
+            
+    def get(self, *arg, **kwargs):
+        people_id = kwargs.get('people_id')
+        if people_id:
+            people = self._get_object(people_id)
+            if not people:
+                return JsonResponse(
+                    {"success": False, "msg":"Could not find people with id: {}".format(people_id)}, status=404)
+            data = serialize_people_as_json(people)
+        else:
+            qs = People.objects.select_related('homeworld').all()
+            data = [serialize_people_as_json(people) for people in qs]
+        return JsonResponse(data, status=200, safe=False)
+        
+    def post(self, *arg, **kwargs):
+        if 'people_id' in kwargs:
+            return JsonResponse(
+                {"success":False, "msg":"Invalid HTTP request"}, status=400)
+                
+        try:
+            payload = json.loads(self.request.body.decode('utf-8'))
+        except ValueError:
+            return JsonResponse(
+                {"success":False, "msg":"Provide a valid JSON payload"}, status=400)
+        
+        planet_id = payload.get('homeworld', None)
+        try:
+            planet = Planet.objects.get(id=planet_id)
+            # we can do payload['homeworld'] = Planet.objects.get(id=planet_id)
+            # and pass **payload to People.objects.create(**payload)
+        except Planet.DoesNotExist:
+            return JsonResponse(
+            {"success":False, "msg":"Could not find planet with id {}".format(planet_id)}, status=404)
+            
+        try:
+            people = People.objects.create(
+                name=payload['name'],
+                homeworld=planet,
+                height=payload['height'],
+                mass=payload['mass'],
+                hair_color=payload['hair_color'])
+        except (ValueError,KeyError):
+            return JsonResponse(
+                {"success": False, "msg":"Provided payload is not valid"}, status=400)
+        
+        data=serialize_people_as_json(people)
+        return JsonResponse(data, status=201, safe=False)
+        
+    def delete(self, *arg, **kwargs):
+        if not 'people_id' in kwargs:
+            return JsonResponse(
+                {"success":False, "msg":"Invalid HTTP request"}, status=400)
+        people_id = kwargs.get('people_id')     
+        people = self._get_object(people_id)
+        if not people:
+            return JsonResponse(
+                {"success": False, "msg":"Could not find people with id {}".format(people_id)}, status=404)
+        data = {"success": True}
+        people.delete()
+        return JsonResponse
+        
+        
+    def _update(self, people, payload, partial=False):
+        for field in ['name', 'homeworld', 'mass', 'height', 'hair_color']:
+            if not field in payload:
+                if partial:
+                    continue
+                return JsonResponse(
+                    {"success": False, "msg":"Missing field in full update"}, status=400)
+            if field == 'homeworld':
+                try:
+                    payload['homeworld'] = Planet.objects.get(id=payload['homeworld'])
+                except Planet.DoesNotExist:
+                    return JsonResponse(
+                        {"success": False, "msg":"Planet with id {} does not exist".format(payload['homeworld'])}, status=400)
+                
+            try:
+                setattr(people, field, payload[field])
+                people.save()
+            except ValueError:
+                return JsonResponse(
+                    {"success": False, "msg":"Provided Json is not valid"}, status=400)
+        data = serialize_people_as_json(people)
+        return JsonResponse(data, status=200, safe=False)
+                    
+
+    def patch(self, *arg, **kwargs):
+        people_id = kwargs.get('people_id')
+        people = self._get_object(people_id)
+        if not people:
+            return JsonResponse(
+                {"success": False, "msg":"Could not find people with id {}".format(people_id)}, status=404)
+        try:        
+            payload = json.loads(self.request.body.decode('utf-8'))
+        except ValueError:
+            return JsonResponse({"success": False, "msg":"Provided payload is not valid"}, status=400)
+        return self._update(people, payload, partial=True)
+        
+    def put(self, *arg, **kwargs):
+        people_id = kwargs.get('people_id')
+        people = self._get_object(people_id)
+        if not people:
+            return JsonResponse(
+                {"success": False, "msg":"Could not find people with id {}".format(people_id)}, status=404)
+        try:        
+            payload = json.loads(self.request.body.decode('utf-8'))
+        except ValueError:
+            return JsonResponse({"success": False, "msg":"Provided payload is not valid"}, status=400)
+        return self._update(people, payload, partial=False)
         
